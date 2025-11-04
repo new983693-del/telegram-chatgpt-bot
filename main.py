@@ -76,11 +76,12 @@ async def start(update, context):
     user = update.message.from_user
     add_user(user.id)
     await update.message.reply_text(
-        f"Namaste 📴! 😊 Main tumhara ChatGPT bot hoon. "
-        "Tumhare har sawal ke jawab dene ke liye ready hu 💬⚡\n\n"
-        "✏️ Sare commands jan'ne ke liye /help likho\n"
-        "( For view all commands - /help )"
-    )
+    f"Namaste 📴! 😊 Main tumhara ChatGPT bot hoon. "
+    "Tumhare har sawal ke jawab dene ke liye ready hu 💬⚡\n\n"
+    "✏️ Sare commands dekhne ke liye 👉 /help\n"
+    "(📘 For viewing all commands - type /help)\n\n"
+    "💭 Ya fir apna sawal pucho chat me 🔥"
+)
 
 async def whoami(update, context):
     uid = update.message.from_user.id
