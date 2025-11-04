@@ -61,17 +61,8 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         reply = resp.choices[0].message.content.strip()
 
-        # ---- DOT INTRO (blinking dots) ----
-        sent = await update.message.reply_text("💬 Typing")
-        for _ in range(6):  # 3 cycles of blinking dots
-            for d in range(1,4):
-                try:
-                    await sent.edit_text("💬 Typing" + "."*d)
-                except Exception:
-                    pass
-                await asyncio.sleep(0.18)
-
-        # ---- ultra-fast type simulation ----
+        # ---- ultra-fast animation ----
+        sent = await update.message.reply_text("...")  # quick placeholder
         chunk_size = 5      # characters per update
         delay = 0.003       # smaller = faster
         shown = ""
@@ -86,7 +77,6 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
             await asyncio.sleep(delay)
 
-        # ensure final text
         try: await sent.edit_text(reply)
         except: pass
 
@@ -121,5 +111,5 @@ app.add_handler(CommandHandler("help", help_command))
 app.add_handler(CommandHandler("reset", reset))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
 
-print("🤖 Bot chal raha hai... dot-intro + ultra-fast animation enabled ⚡💬")
+print("🤖 Bot chal raha hai... ultra-fast animation, no dot intro ⚡💬")
 app.run_polling()
