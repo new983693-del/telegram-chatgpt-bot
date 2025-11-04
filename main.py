@@ -23,7 +23,7 @@ BANNED_FILE = "banned.json"
 BROADCAST_FILE = "broadcast.json"
 
 # Replace with your actual Telegram ID (owner)
-OWNER_ID = 123456789
+OWNER_ID = 7157701836
 
 # Conversation memory (in-memory short-term)
 conversation_memory = {}
