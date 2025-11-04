@@ -4,10 +4,8 @@ from openai import OpenAI
 from gtts import gTTS
 import os
 
-# 🔐 Apni keys yahan daalo
-OPENAI_API_KEY = "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"
-TELEGRAM_BOT_TOKEN = "8174966165:AAG4-LrCWTeHIZWadU3dDf1MvS2IVmxxM6k"
-
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 client = OpenAI(api_key=OPENAI_API_KEY)
 conversation_memory = {}
 
