@@ -16,7 +16,7 @@ USERS_FILE = "users.json"
 ADMINS_FILE = "admins.json"
 BROADCAST_FILE = "broadcast.json"   # store last broadcast
 
-OWNER_ID = 123456789  # 🔑 replace with your Telegram ID
+OWNER_ID = 7157701836  # 🔑 replace with your Telegram ID
 
 # ========== JSON HELPERS ==========
 def load_json(path):
