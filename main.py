@@ -3,6 +3,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 from openai import OpenAI
 from gtts import gTTS
 import os
+
 from keep_alive import keep_alive
 keep_alive()
 
