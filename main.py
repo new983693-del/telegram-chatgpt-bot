@@ -8,11 +8,10 @@ import asyncio
 from keep_alive import keep_alive
 keep_alive()
 
-# 🔑 API keys from environment
+# 🔑 Environment keys
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# 🧠 Clients & memory
 client = OpenAI(api_key=OPENAI_API_KEY)
 conversation_memory = {}
 
@@ -20,7 +19,7 @@ conversation_memory = {}
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Namaste! Main tumhara ChatGPT bot hoon.\n"
-        "Main yaad rakhta hoon aur agar chaho to voice me bhi bol sakta hoon!\n\n"
+        "Main yaad rakhta hoon aur voice me bhi reply kar sakta hoon jab tum bolo.\n\n"
         "🧠 Commands:\n"
         "/reset - memory clear karo\n"
         "/help - info dekho"
@@ -38,7 +37,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✨ Main tumhara personal ChatGPT bot hoon!\n"
         "👉 'voice me batao' ya 'bol kar bata' likhne par voice reply milega 🔊\n"
         "👉 /reset se memory clear hoti hai.\n"
-        "👉 Ab typing indicator bhi dikhai deta hai 💬"
+        "👉 Ab reply ChatGPT jaisa animate hota hai 💬"
     )
 
 # 💬 Main chat function
@@ -46,23 +45,22 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     user_text = update.message.text.lower()
 
-    # 🖼️ Image feature placeholder
+    # 🖼️ Image placeholder
     if any(word in user_text for word in ["photo", "image", "picture", "pic", "bana do", "draw", "photo bana do"]):
         await update.message.reply_text("🖼️ Image generation feature coming soon!")
         return
 
-    # 🧠 Memory initialize
+    # 🧠 Memory init
     if user_id not in conversation_memory:
         conversation_memory[user_id] = []
 
     conversation_memory[user_id].append({"role": "user", "content": user_text})
 
     try:
-        # 💭 Show typing indicator before thinking
+        # 💭 Typing indicator
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-        await asyncio.sleep(1.8)
 
-        # 💬 ChatGPT response
+        # 💬 GPT reply
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -71,28 +69,32 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         )
 
-        reply = response.choices[0].message.content
+        full_reply = response.choices[0].message.content
 
-        # ✨ Reply in text
-        await update.message.reply_text(reply)
+        # 🧩 ChatGPT-style animation
+        display_text = ""
+        sent_message = await update.message.reply_text("...")
 
-        # 🎙️ Voice reply only if user requested
+        for char in full_reply:
+            display_text += char
+            # edit message continuously
+            await sent_message.edit_text(display_text)
+            await asyncio.sleep(0.02)  # typing speed
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+        # 🎙️ Voice only if requested
         if any(word in user_text for word in ["voice", "bol kar", "audio", "sunao", "voice me"]):
             try:
                 await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="record_voice")
-                await asyncio.sleep(1.2)
-
-                tts = gTTS(reply, lang='hi')
+                tts = gTTS(full_reply, lang='hi')
                 tts.save("voice.mp3")
                 await update.message.reply_voice(voice=open("voice.mp3", "rb"))
                 os.remove("voice.mp3")
             except Exception:
                 await update.message.reply_text("⚠️ Voice generate karne me dikkat aayi.")
 
-        # 🧠 Store assistant reply in memory
-        conversation_memory[user_id].append({"role": "assistant", "content": reply})
-
-        # 🧹 Limit memory size
+        # 🧠 Memory update
+        conversation_memory[user_id].append({"role": "assistant", "content": full_reply})
         if len(conversation_memory[user_id]) > 10:
             conversation_memory[user_id] = conversation_memory[user_id][-10:]
 
@@ -106,5 +108,5 @@ app.add_handler(CommandHandler("help", help_command))
 app.add_handler(CommandHandler("reset", reset))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
 
-print("🤖 Bot chal raha hai... enjoy chatting!")
+print("🤖 Bot chal raha hai... enjoy chatting with animation!")
 app.run_polling()
