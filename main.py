@@ -1,9 +1,15 @@
-# main.py (FINAL: self-ping + gist backup/restore + typing sync + full commands)
+# main.py (FINAL SAFE MERGED VERSION)
+# - Single-instance lockfile (prevents getUpdates Conflict)
+# - Self-ping (keeps Render awake)
+# - Gist backup/restore (optional, needs GITHUB_TOKEN)
+# - Typing indicator sync fixed
+# - All commands + broadcast + persistence
+
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from openai import OpenAI
 from gtts import gTTS
-import os, asyncio, json, random, traceback, time, threading, requests
+import os, asyncio, json, random, traceback, time, threading, requests, sys, signal
 
 # keep_alive must exist in project (Flask server). It runs the HTTP endpoint.
 from keep_alive import keep_alive
@@ -12,10 +18,72 @@ keep_alive()
 # ========== CONFIG ==========
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # optional but recommended (gist backup)
-client = OpenAI(api_key=OPENAI_API_KEY)
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # optional (gist backup)
+RENDER_URL = os.getenv("RENDER_URL") or "https://telegram-chatgpt-bot-p3gm.onrender.com/"
 
-OWNER_ID = 7157701836  # <-- owner id you requested
+if not OPENAI_API_KEY or not TELEGRAM_BOT_TOKEN:
+    print("ERROR: Set OPENAI_API_KEY and TELEGRAM_BOT_TOKEN environment variables.")
+    sys.exit(1)
+
+client = OpenAI(api_key=OPENAI_API_KEY)
+OWNER_ID = 7157701836  # your owner id
+
+# ===== lockfile (prevent multiple getUpdates) =====
+LOCKFILE = "bot_instance.lock"
+
+def is_process_running(pid):
+    try:
+        # signal 0 does not kill but checks existence
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    else:
+        return True
+
+def create_lock_or_exit():
+    # If lock exists, read pid and check if alive
+    if os.path.exists(LOCKFILE):
+        try:
+            pid = int(open(LOCKFILE).read().strip())
+            if is_process_running(pid):
+                print(f"Another instance (pid={pid}) seems to be running. Exiting to avoid getUpdates Conflict.")
+                # try notify owner that an instance attempted to start (best-effort)
+                try:
+                    from telegram import Bot
+                    Bot(token=TELEGRAM_BOT_TOKEN).send_message(chat_id=OWNER_ID,
+                        text=f"⚠️ Another instance attempted to start (pid={os.getpid()}). I exited to avoid conflict.")
+                except Exception:
+                    pass
+                sys.exit(0)
+            else:
+                print("Stale lockfile found, removing and acquiring new lock.")
+        except Exception:
+            print("Bad lockfile contents, overwriting.")
+    # write current pid
+    try:
+        with open(LOCKFILE, "w") as fh:
+            fh.write(str(os.getpid()))
+        print("Lock acquired, pid:", os.getpid())
+    except Exception as e:
+        print("Could not write lockfile:", e)
+        sys.exit(1)
+
+def remove_lockfile():
+    try:
+        if os.path.exists(LOCKFILE):
+            os.remove(LOCKFILE)
+            print("Lockfile removed.")
+    except Exception as e:
+        print("Failed to remove lockfile:", e)
+
+# ensure lock created at start
+create_lock_or_exit()
+# remove lock gracefully on exit
+def _graceful_exit(signum=None, frame=None):
+    remove_lockfile()
+    sys.exit(0)
+signal.signal(signal.SIGTERM, _graceful_exit)
+signal.signal(signal.SIGINT, _graceful_exit)
 
 # ===== Files & Memory =====
 conversation_memory = {}
@@ -23,13 +91,16 @@ USERS_FILE = "users.json"
 ADMINS_FILE = "admins.json"
 BANNED_FILE = "banned.json"
 BROADCAST_FILE = "broadcast.json"
-GIST_ID_FILE = "gist_id.txt"  # stores gist id after first create
-
+GIST_ID_FILE = "gist_id.txt"
 FILES = [USERS_FILE, ADMINS_FILE, BANNED_FILE, BROADCAST_FILE]
+
 for f in FILES:
     if not os.path.exists(f):
-        with open(f, "w") as fh:
-            json.dump([], fh)
+        try:
+            with open(f, "w") as fh:
+                json.dump([], fh)
+        except Exception as e:
+            print("Error creating file", f, e)
 
 # ===== JSON helpers =====
 def safe_load(path):
@@ -92,9 +163,9 @@ def short_users_text():
 def is_owner(uid): return uid == OWNER_ID
 def is_admin(uid): return is_owner(uid) or (uid in load_admins())
 
-# ===== GitHub Gist backup/restore helpers =====
+# ===== GitHub Gist helpers (optional) =====
 GIST_API = "https://api.github.com/gists"
-GIST_FILENAMES = [USERS_FILE, ADMINS_FILE, BANNED_FILE, BROADCAST_FILE]
+GIST_FILENAMES = FILES
 
 def read_local_gist_id():
     if os.path.exists(GIST_ID_FILE):
@@ -117,12 +188,12 @@ def create_gist_from_files():
         return None
     files_payload = {}
     for fn in GIST_FILENAMES:
-        content = ""
+        content = "[]"
         try:
             with open(fn, "r") as f:
                 content = f.read()
         except:
-            content = "[]"
+            pass
         files_payload[fn] = {"content": content}
     body = {"description": "Bot JSON backup", "public": False, "files": files_payload}
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
@@ -188,9 +259,7 @@ def restore_from_gist(gist_id):
         print("Gist fetch exception:", e)
     return False
 
-# On startup: try to restore if local files look empty
 def startup_restore():
-    # If any important file empty or size small, attempt restore from gist
     need_restore = False
     for fn in GIST_FILENAMES:
         try:
@@ -207,15 +276,12 @@ def startup_restore():
         if ok:
             print("Restore from gist successful.")
             return
-    # If no local id or restore failed and token available, try listing user's gists (try to find one)
     if GITHUB_TOKEN:
-        # Create one if none exists (safe fallback)
         print("No valid gist restore found. Creating initial gist backup.")
         gid = create_gist_from_files()
         if gid:
             print("Initial gist created:", gid)
 
-# Periodic backup task: update gist every X seconds
 def start_periodic_backup(interval_seconds=600):
     def run():
         while True:
@@ -231,9 +297,8 @@ def start_periodic_backup(interval_seconds=600):
     t = threading.Thread(target=run, daemon=True)
     t.start()
 
-# Run restore on startup
+# startup restore & periodic backup
 startup_restore()
-# start periodic background backup (10 minutes)
 if GITHUB_TOKEN:
     start_periodic_backup(600)
 
@@ -250,8 +315,6 @@ def start_self_ping(url, interval=240):
     t = threading.Thread(target=ping_loop, daemon=True)
     t.start()
 
-# replace with your actual render URL:
-RENDER_URL = os.getenv("RENDER_URL") or "https://telegram-chatgpt-bot-p3gm.onrender.com/"
 start_self_ping(RENDER_URL, interval=240)
 
 # ===== Commands =====
@@ -265,7 +328,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💭 Ya fir apna sawal pucho chat me 🔥"
     )
 
-async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def whoami_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
     role = "👑 Owner" if is_owner(uid) else "🛡 Admin" if is_admin(uid) else "🚫 Banned" if is_banned(uid) else "👤 User"
     await update.message.reply_text(f"🪪 *Your Info:*\nRole: {role}\nID: `{uid}`", parse_mode="Markdown")
@@ -276,8 +339,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👑 *Owner:*\n"
         "/ma - Make Admin\n"
         "/ra - Remove Admin\n"
-        "/mo - Transfer Ownership\n"
-        "/ban - Ban User/Admin\n"
+        "/mo - Transfer Ownership\n        /ban - Ban User/Admin\n"
         "/unban - Unban User/Admin\n\n"
         "🛡 *Admin + Owner:*\n"
         "/stats - Total Users\n"
@@ -422,12 +484,12 @@ async def _start_typing_task(bot, chat_id, stop_event: asyncio.Event):
                 await bot.send_chat_action(chat_id=chat_id, action="typing")
             except:
                 pass
-            # send every 3 seconds while reply is generating
-            await asyncio.sleep(3)
+            # send every 1.5 seconds while reply is generating
+            await asyncio.sleep(1.5)
     except asyncio.CancelledError:
         pass
 
-# ===== ChatGPT Handler (with typing sync) =====
+# ===== ChatGPT Handler (improved typing sync) =====
 async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
     if is_banned(uid):
@@ -440,19 +502,28 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or ""
     conversation_memory[uid].append({"role": "user", "content": text})
 
-    # start typing task
+    # start typing task before generation
     stop_event = asyncio.Event()
     typing_task = asyncio.create_task(_start_typing_task(context.bot, update.effective_chat.id, stop_event))
 
     try:
-        # Make ChatGPT request
+        # generate reply
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "system", "content": "You are a friendly assistant who replies in Hinglish."}] + conversation_memory[uid]
         )
         reply = resp.choices[0].message.content.strip()
 
-        # send and animate reply
+        # stop typing BEFORE sending final message so platform removes indicator immediately
+        stop_event.set()
+        # give tiny moment for task to stop
+        await asyncio.sleep(0.05)
+        try:
+            typing_task.cancel()
+        except:
+            pass
+
+        # send animated edit reply
         sent = await update.message.reply_text("...")
         shown = ""
         for i in range(0, len(reply), 8):
@@ -478,6 +549,7 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 os.remove("voice.mp3")
             except Exception:
                 await update.message.reply_text("⚠️ Voice generate karne me dikkat aayi.")
+
         # save conversation
         conversation_memory[uid].append({"role": "assistant", "content": reply})
         if len(conversation_memory[uid]) > 10:
@@ -487,24 +559,22 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print("Chat error:", traceback.format_exc())
         await update.message.reply_text(f"⚠️ Chat error: {e}")
     finally:
-        # stop typing immediately
+        # ensure typing stopped
         try:
             stop_event.set()
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.02)
             typing_task.cancel()
         except:
             pass
 
 # ===== Setup & Run =====
 def main():
-    # on startup, ensure gist exists (if token provided) and periodic backup is running
-    # (startup_restore and periodic backup were started earlier)
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     # commands
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("whoami", whoami))
+    app.add_handler(CommandHandler("whoami", whoami_cmd))
     app.add_handler(CommandHandler("ma", ma_cmd))
     app.add_handler(CommandHandler("ra", ra_cmd))
     app.add_handler(CommandHandler("mo", mo_cmd))
@@ -519,8 +589,12 @@ def main():
     # chat handler
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler))
 
-    print("🤖 Bot running stable (self-ping + gist backup + typing sync).")
-    app.run_polling()
+    print("🤖 Bot running stable (self-ping + gist backup + lockfile + typing sync).")
+    try:
+        app.run_polling()
+    finally:
+        # cleanup lockfile on exit
+        remove_lockfile()
 
 if __name__ == "__main__":
     main()
