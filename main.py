@@ -1,5 +1,9 @@
-# main.py (FINAL SAFE MERGED VERSION ✅)
-# Render-safe, no conflicts, single instance, auto self-ping, typing sync
+# main.py (FINAL CLEAN + STABLE VERSION ✅)
+# - Lockfile (no multiple instances)
+# - Self-ping to keep Render alive
+# - Perfect typing animation sync
+# - No "Message not modified" errors
+# - Admin / Owner control + Broadcast + Voice support
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
@@ -7,23 +11,23 @@ from openai import OpenAI
 from gtts import gTTS
 import os, asyncio, json, time, threading, requests, signal, sys, traceback
 
-# ---------------- KEEP ALIVE ----------------
+# ===== KEEP ALIVE (Flask server for Render uptime) =====
 from keep_alive import keep_alive
 keep_alive()
 
-# ---------------- CONFIG ----------------
+# ===== CONFIG =====
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 RENDER_URL = os.getenv("RENDER_URL") or "https://telegram-chatgpt-bot-p3gm.onrender.com/"
-OWNER_ID = 7157701836  # 👑 MAIN OWNER ID (edit here if needed)
+OWNER_ID = 7157701836  # 👑 Your Owner ID
 
 if not OPENAI_API_KEY or not TELEGRAM_BOT_TOKEN:
-    print("❌ Missing API keys. Please set OPENAI_API_KEY and TELEGRAM_BOT_TOKEN.")
+    print("❌ ERROR: Missing API keys.")
     sys.exit(1)
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# ---------------- SINGLE INSTANCE LOCK ----------------
+# ===== SINGLE INSTANCE LOCK =====
 LOCKFILE = "bot_instance.lock"
 
 def is_process_running(pid):
@@ -38,46 +42,40 @@ def create_lock_or_exit():
         try:
             pid = int(open(LOCKFILE).read())
             if is_process_running(pid):
-                print(f"⚠️ Instance already running (PID={pid}). Exiting to avoid conflict.")
+                print(f"⚠️ Instance already running (PID={pid}). Exiting to prevent conflict.")
                 sys.exit(0)
         except:
-            print("Old lockfile ignored.")
+            print("Old lockfile found, replacing...")
     with open(LOCKFILE, "w") as f:
         f.write(str(os.getpid()))
     print(f"🔒 Lock acquired (PID={os.getpid()})")
 
 def remove_lockfile():
-    try:
-        if os.path.exists(LOCKFILE):
-            os.remove(LOCKFILE)
-            print("🧹 Lockfile removed.")
-    except:
-        pass
+    if os.path.exists(LOCKFILE):
+        os.remove(LOCKFILE)
+        print("🧹 Lockfile removed.")
 
 create_lock_or_exit()
 signal.signal(signal.SIGTERM, lambda s, f: (remove_lockfile(), sys.exit(0)))
 signal.signal(signal.SIGINT, lambda s, f: (remove_lockfile(), sys.exit(0)))
 
-# ---------------- FILES & MEMORY ----------------
+# ===== FILES & MEMORY =====
 conversation_memory = {}
 FILES = ["users.json", "admins.json", "banned.json", "broadcast.json"]
-
 for f in FILES:
     if not os.path.exists(f):
         with open(f, "w") as fh:
             json.dump([], fh)
 
-def load_json(path):
-    try:
-        return json.load(open(path))
-    except:
-        return []
+def load_json(f): 
+    try: return json.load(open(f))
+    except: return []
 
-def save_json(path, data):
-    json.dump(data, open(path, "w"), indent=2)
+def save_json(f, d): 
+    json.dump(d, open(f, "w"), indent=2)
 
 def load_users(): return load_json("users.json")
-def save_users(x): save_json("users.json", x)
+def save_users(d): save_json("users.json", d)
 def add_user(uid):
     u = load_users()
     if uid not in u:
@@ -85,7 +83,7 @@ def add_user(uid):
         save_users(u)
 
 def load_admins(): return load_json("admins.json")
-def save_admins(x): save_json("admins.json", x)
+def save_admins(d): save_json("admins.json", d)
 def add_admin(uid):
     a = load_admins()
     if uid not in a:
@@ -98,7 +96,7 @@ def remove_admin(uid):
         save_admins(a)
 
 def load_banned(): return load_json("banned.json")
-def save_banned(x): save_json("banned.json", x)
+def save_banned(d): save_json("banned.json", d)
 def ban_user(uid, reason=None, by=None):
     bans = load_banned()
     if not any(b.get("id") == uid for b in bans):
@@ -109,7 +107,7 @@ def unban_user(uid):
 def is_banned(uid): return any(b.get("id") == uid for b in load_banned())
 
 def load_broadcast(): return load_json("broadcast.json")
-def save_broadcast(x): save_json("broadcast.json", x)
+def save_broadcast(d): save_json("broadcast.json", d)
 
 def is_owner(uid): return uid == OWNER_ID
 def is_admin(uid): return is_owner(uid) or uid in load_admins()
@@ -118,7 +116,7 @@ def short_users_text():
     u = load_users()
     return f"👥 Total Users: {len(u)}\n" + "\n".join(map(str, u[:200]))
 
-# ---------------- SELF PING ----------------
+# ===== SELF-PING (Keep Render alive) =====
 def start_self_ping(url, interval=300):
     def loop():
         while True:
@@ -132,7 +130,7 @@ def start_self_ping(url, interval=300):
 
 start_self_ping(RENDER_URL, 300)
 
-# ---------------- COMMANDS ----------------
+# ===== COMMANDS =====
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_user(update.message.from_user.id)
     await update.message.reply_text(
@@ -161,7 +159,7 @@ async def whoami_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     role = "👑 Owner" if is_owner(uid) else "🛡 Admin" if is_admin(uid) else "🚫 Banned" if is_banned(uid) else "👤 User"
     await update.message.reply_text(f"🪪 *Your Info:*\nRole: {role}\nID: `{uid}`", parse_mode="Markdown")
 
-# ---------------- ADMIN / OWNER COMMANDS ----------------
+# ===== ADMIN / OWNER COMMANDS =====
 async def ma_cmd(update, context):
     if not is_owner(update.message.from_user.id):
         return await update.message.reply_text("🚫 Sirf Owner ke liye.")
@@ -243,7 +241,7 @@ async def removebroadcast_cmd(update, context):
     save_broadcast([])
     await update.message.reply_text(f"🗑 Deleted {count} broadcast messages.")
 
-# ---------------- CHATGPT HANDLER (TYPING FIXED) ----------------
+# ===== TYPING ANIMATION FIXED =====
 async def _typing_loop(bot, chat_id, stop_event):
     try:
         while not stop_event.is_set():
@@ -261,7 +259,7 @@ async def chat(update, context):
     if uid not in conversation_memory:
         conversation_memory[uid] = []
 
-    text = update.message.text
+    text = update.message.text or ""
     conversation_memory[uid].append({"role": "user", "content": text})
 
     stop_event = asyncio.Event()
@@ -274,14 +272,18 @@ async def chat(update, context):
         )
         reply = resp.choices[0].message.content.strip()
 
-        stop_event.set()
-        await asyncio.sleep(0.05)
-        typing_task.cancel()
+        stop_event.set(); await asyncio.sleep(0.05); typing_task.cancel()
 
         msg = await update.message.reply_text("...")
+        shown = ""
         for i in range(0, len(reply), 8):
-            try: await msg.edit_text(reply[:i+8])
-            except: pass
+            new = reply[:i+8]
+            if new != shown:  # avoid “message not modified”
+                shown = new
+                try: await msg.edit_text(new)
+                except Exception as e:
+                    if "not modified" not in str(e).lower():
+                        print("Edit error:", e)
             await asyncio.sleep(0.001)
         await msg.edit_text(reply)
 
@@ -302,16 +304,16 @@ async def chat(update, context):
         await update.message.reply_text(f"⚠️ Chat error: {e}")
         print("Error:", traceback.format_exc())
 
-# ---------------- RUN BOT ----------------
+# ===== RUN BOT =====
 def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    cmds = [
+    commands = [
         ("start", start_cmd), ("help", help_cmd), ("whoami", whoami_cmd),
         ("ma", ma_cmd), ("ra", ra_cmd), ("ban", ban_cmd), ("unban", unban_cmd),
         ("stats", stats_cmd), ("showusers", showusers_cmd),
         ("broadcast", broadcast_cmd), ("removebroadcast", removebroadcast_cmd)
     ]
-    for name, func in cmds:
+    for name, func in commands:
         app.add_handler(CommandHandler(name, func))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
     print("🤖 Bot running stable — clean logs, synced typing, single instance OK.")
